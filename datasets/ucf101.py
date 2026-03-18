@@ -2,8 +2,8 @@ import os
 import pickle
 import re
 from collections import defaultdict
-from Dassl.dassl.data.datasets.base_dataset import DatasetBase, Datum
-from Dassl.dassl.utils import mkdir_if_missing
+from dassl.data.datasets.base_dataset import DatasetBase, Datum
+from dassl.utils import mkdir_if_missing
 
 from .oxford_pets import OxfordPets
 

@@ -1,7 +1,7 @@
 import os
 
-# from Dassl.dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
-# from Dassl.dassl.data.datasets import DatasetBase
+# from dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
+# from dassl.data.datasets import DatasetBase
 from datasplit import partition_data
 
 # @DATASET_REGISTRY.register()

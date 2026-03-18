@@ -4,9 +4,9 @@ import random
 from scipy.io import loadmat
 from collections import defaultdict
 
-# from Dassl.dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
-from Dassl.dassl.data.datasets.base_dataset import DatasetBase, Datum
-from Dassl.dassl.utils import read_json, mkdir_if_missing
+# from dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
+from dassl.data.datasets.base_dataset import DatasetBase, Datum
+from dassl.utils import read_json, mkdir_if_missing
 
 from .oxford_pets import OxfordPets
 

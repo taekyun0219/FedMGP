@@ -1,8 +1,8 @@
 import os
 import pickle
 from collections import defaultdict, OrderedDict
-from Dassl.dassl.data.datasets.base_dataset import DatasetBase, Datum
-from Dassl.dassl.utils import listdir_nohidden, mkdir_if_missing
+from dassl.data.datasets.base_dataset import DatasetBase, Datum
+from dassl.utils import listdir_nohidden, mkdir_if_missing
 
 from .oxford_pets import OxfordPets
 

@@ -19,7 +19,7 @@ import pickle
 import string
 from torchvision.transforms import Compose, ToTensor, Normalize
 from torch.utils.data import Dataset
-from Dassl.dassl.utils import check_isfile
+from dassl.utils import check_isfile
 
 def mkdirs(dirpath):
     try:

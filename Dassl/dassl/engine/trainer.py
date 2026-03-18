@@ -409,22 +409,59 @@ class SimpleTrainer(TrainerBase):
         """
         pass
 
-    def build_data_loader(self):
-        """Create essential data-related attributes.
+    # def build_data_loader(self):
+    #     """Create essential data-related attributes.
 
-        A re-implementation of this method must create the
-        same attributes (except self.dm).
-        """
+    #     A re-implementation of this method must create the
+    #     same attributes (except self.dm).
+    #     """
+    #     dm = DataManager(self.cfg)
+
+    #     self.fed_train_loader_x_dict = dm.fed_train_loader_x_dict
+    #     self.fed_test_loader_x_dict = dm.fed_test_loader_x_dict
+    #     self.test_loader = dm.test_loader
+
+    #     self.num_classes = dm.num_classes
+    #     self.num_source_domains = dm.num_source_domains
+    #     self.lab2cname = dm.lab2cname  # dict {label: classname}
+    #     self.classnames = dm.classnames
+
+    #     self.dm = dm
+
+    def build_data_loader(self):
         dm = DataManager(self.cfg)
 
-        self.fed_train_loader_x_dict = dm.fed_train_loader_x_dict
-        self.fed_test_loader_x_dict = dm.fed_test_loader_x_dict
+        n_users = max(1, int(getattr(self.cfg.DATASET, "USERS", 1)))
+
+        # federated train loader fallback
+        if hasattr(dm, "fed_train_loader_x_dict"):
+            self.fed_train_loader_x_dict = dm.fed_train_loader_x_dict
+        else:
+            base_train = getattr(dm, "train_loader_x", None)
+            self.fed_train_loader_x_dict = {i: base_train for i in range(n_users)}
+
+        # federated test loader fallback
+        if hasattr(dm, "fed_test_loader_x_dict"):
+            self.fed_test_loader_x_dict = dm.fed_test_loader_x_dict
+        else:
+            base_test = getattr(dm, "test_loader", None)
+            self.fed_test_loader_x_dict = {i: base_test for i in range(n_users)}
+
         self.test_loader = dm.test_loader
 
         self.num_classes = dm.num_classes
         self.num_source_domains = dm.num_source_domains
         self.lab2cname = dm.lab2cname  # dict {label: classname}
-        self.classnames = dm.classnames
+
+        # fallback for DataManager versions without `classnames`
+        if hasattr(dm, "classnames"):
+            self.classnames = dm.classnames
+        elif hasattr(dm, "dataset") and hasattr(dm.dataset, "classnames"):
+            self.classnames = dm.dataset.classnames
+        elif isinstance(self.lab2cname, dict):
+            self.classnames = [self.lab2cname[k] for k in sorted(self.lab2cname.keys())]
+        else:
+            self.classnames = []
 
         self.dm = dm
 
