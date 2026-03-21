@@ -17,8 +17,8 @@ OPTIM:
   NAME: "sgd"
   LR: 0.001
   LR_SCHEDULER: "single_step"
-  ROUND: 10  # global round
-  MAX_EPOCH: 2  # local epoch
+  ROUND: 500  # global round
+  MAX_EPOCH: 1  # local epoch
   WARMUP_EPOCH: 0
   WARMUP_TYPE: "constant"
   WARMUP_CONS_LR: 1e-5
@@ -34,12 +34,12 @@ MODEL:
 
 DATASET:
   SUBSAMPLE_CLASSES: "base"  # all, base or new
-  USERS: 10  # number of clients
+  USERS: 30  # number of clients
   IID: False  # is iid
   FRAC: 1.0
   PARTITION: "noniid-labeldir"
   USEALL: False  # use all data for training instead of few shot
-  NUM_SHOTS: 4
+  NUM_SHOTS: 8
   BETA: 0.3
   REPEATRATE: 0.0  # repeat rate on each client
   IMBALANCE_TRAIN: False  # is adding label skew to feature skew datasets

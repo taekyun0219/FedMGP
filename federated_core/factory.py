@@ -8,6 +8,7 @@ from .trainers.fedopt_learner import FedOPTLearner
 from .trainers.ivlp_learner import IVLPLearner
 from .trainers.promptfl_learner import PromptFLLearner
 from .trainers.fedtpg_learner import FedTPGLearner
+from .trainers.fedmopg_learner import FedMoPGLearner
 from .trainers.vpt_learner import VPTLearner
 from .trainers.fedcocoop_learner import FedCoCoOpLearner
 from .trainers.fedmaple_learner import FedMaPLeLearner

@@ -14,6 +14,7 @@ from trainers.fedpgp import FedPGP
 from trainers.fedopt import FedOPT
 from trainers.promptFolio import PromptFolio
 from trainers.fedtpg import FedTPG
+from trainers.fedmopg import FedMoPG
 from trainers.vpt import VPT
 from trainers.independentVL import IVLP
 from trainers.fedmgp import FedMGP

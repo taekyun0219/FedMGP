@@ -139,6 +139,19 @@ def extend_cfg(cfg):
     cfg.TRAINER.FEDTPG.DEPTH = 0
     cfg.TRAINER.FEDTPG.PREC = "fp16"  # fp16, fp32, amp
 
+    # Config for FedMoPG
+    cfg.TRAINER.FEDMOPG = CN()
+    cfg.TRAINER.FEDMOPG.N_CTX = 4  # number of context vectors in each prompt
+    cfg.TRAINER.FEDMOPG.D_CTX = 1  # prompt insertion depth shared by text/vision
+    cfg.TRAINER.FEDMOPG.DEPTH = 0  # self-attention depth inside generator
+    cfg.TRAINER.FEDMOPG.NUM_PROMPT_PAIRS = 4  # G in mixture-of-prompt generation
+    cfg.TRAINER.FEDMOPG.CROSS_HEADS = 4
+    cfg.TRAINER.FEDMOPG.SELF_HEADS = 4
+    cfg.TRAINER.FEDMOPG.PREC = "fp16"  # fp16, fp32, amp
+    cfg.TRAINER.FEDMOPG.USE_DIVERGENT_LOSS = False
+    cfg.TRAINER.FEDMOPG.DIVERGENT_LOSS_WEIGHT = 0.1
+    cfg.TRAINER.FEDMOPG.DIVERGENT_LOSS_TYPE = "cos"  # cos, l1, l2
+
     # Config for VPT
     cfg.TRAINER.VPT = CN()
     cfg.TRAINER.VPT.N_CTX_VISION = 4  # number of context vectors at the vision branch
@@ -291,8 +304,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     main(args)
-
-
 
 
 
