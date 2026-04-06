@@ -4,14 +4,13 @@ GPU=$1                                    # GPU ID
 DATASET=$2                                # Dataset name
 SUBSAMPLE_CLASSES=${3:-"base"}            # Class subset to test (base/new)
 SHOTS=${4:-8}                             # Number of shots, default 8
-CONFIG_FILE=${5:-"0513-latest-4"}         # Config file name
+CONFIG_FILE=${5:-"base2novel_vit_b16"}    # Config file name
 SEED=${6:-0}                              # Random seed, default 0
 
 DATA="${COOP_DATASET}"                    # Dataset root path
 cfg_file=${CONFIG_FILE}
-trainer=FedMGP
-model=FedMGP
-#SEED=0
+trainer=FedMoPG
+model=FedMoPG
 USEALL=False
 
 # Base model path for loading weights

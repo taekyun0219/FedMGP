@@ -217,7 +217,7 @@ class BaseFederatedLearner(ABC):
             self._load_trainable_params(self.trainer.model,
                                       self.client_weights['local'][test_client_id])
 
-            client_result = self.trainer.test(global_test=True)
+            client_result = self.trainer.test(global_test=True, current_epoch=round_idx)
 
             for client_id in client_ids:
                 self.metrics[metrics_key]['client_acc'][client_id][round_idx] = client_result[0]
@@ -229,9 +229,9 @@ class BaseFederatedLearner(ABC):
                                           self.client_weights['local'][client_id])
 
                 if is_global and not self.is_special_dataset:
-                    client_result = self.trainer.test(global_test=True)
+                    client_result = self.trainer.test(global_test=True, current_epoch=round_idx)
                 else:
-                    client_result = self.trainer.test(idx=client_id)
+                    client_result = self.trainer.test(idx=client_id, current_epoch=round_idx)
 
                 self.metrics[metrics_key]['client_acc'][client_id][round_idx] = client_result[0]
                 results.append(client_result)

@@ -8,9 +8,8 @@ SEED=${5:-0}                              # Random seed, default 0
 
 DATA="${COOP_DATASET}"                    # Dataset root path
 cfg_file=${CONFIG_FILE}
-trainer=FedMGP
-model=FedMGP
-#SEED=0
+trainer=FedMoPG
+model=FedMoPG
 SUBSAMPLE_CLASSES=base
 USEALL=False
 

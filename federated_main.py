@@ -46,6 +46,8 @@ def reset_cfg(cfg, args):
     if args.debug_mode is not None:
         cfg.DEBUG_MODE = args.debug_mode
 
+    cfg.EVAL_ONLY = args.eval_only
+
 
 def extend_cfg(cfg):
     """
@@ -61,6 +63,7 @@ def extend_cfg(cfg):
     from yacs.config import CfgNode as CN
     
     cfg.DEBUG_MODE = False
+    cfg.EVAL_ONLY = False
     
     # Config for PromptFL
     cfg.TRAINER.PROMPTFL = CN()
@@ -110,6 +113,12 @@ def extend_cfg(cfg):
     cfg.TRAINER.FEDMGP.PROBABILISTIC_SELECTION = False  # probability sampling based on similarity
     cfg.TRAINER.FEDMGP.TEMPERATURE = 1.0  # softmax temperature for probability distribution
 
+    # Config for FedMGPV2
+    cfg.TRAINER.FEDMGPV2 = cfg.TRAINER.FEDMGP.clone()
+    cfg.TRAINER.FEDMGPV2.NUM_PROMPTS_VISION = 2
+    cfg.TRAINER.FEDMGPV2.NUM_PROMPTS_TEXT = 2
+    cfg.TRAINER.FEDMGPV2.TOPK = 1
+
     # Config for FedOPT
     cfg.TRAINER.FEDOPT = CN()
     cfg.TRAINER.FEDOPT.N_CTX = 16  # number of context vectors
@@ -144,13 +153,12 @@ def extend_cfg(cfg):
     cfg.TRAINER.FEDMOPG.N_CTX = 4  # number of context vectors in each prompt
     cfg.TRAINER.FEDMOPG.D_CTX = 1  # prompt insertion depth shared by text/vision
     cfg.TRAINER.FEDMOPG.DEPTH = 0  # self-attention depth inside generator
-    cfg.TRAINER.FEDMOPG.NUM_PROMPT_PAIRS = 4  # G in mixture-of-prompt generation
     cfg.TRAINER.FEDMOPG.CROSS_HEADS = 4
     cfg.TRAINER.FEDMOPG.SELF_HEADS = 4
+    # Client-adaptive semantic generator(image feature) + Cross-modal coupled prompt refinement
+    cfg.TRAINER.FEDMOPG.PROTOTYPE_WEIGHT = 0.5  # strength of local visual prototype conditioning
+    cfg.TRAINER.FEDMOPG.PROTOTYPE_MOMENTUM = 0.9  # EMA memory over client-local prototypes
     cfg.TRAINER.FEDMOPG.PREC = "fp16"  # fp16, fp32, amp
-    cfg.TRAINER.FEDMOPG.USE_DIVERGENT_LOSS = False
-    cfg.TRAINER.FEDMOPG.DIVERGENT_LOSS_WEIGHT = 0.1
-    cfg.TRAINER.FEDMOPG.DIVERGENT_LOSS_TYPE = "cos"  # cos, l1, l2
 
     # Config for VPT
     cfg.TRAINER.VPT = CN()
@@ -219,6 +227,9 @@ def setup_cfg(args):
 
     # 4. From optional input arguments
     cfg.merge_from_list(args.opts)
+
+    if cfg.TRAINER.NAME == "FedMGPV2":
+        cfg.TRAINER.FEDMGP = cfg.TRAINER.FEDMGPV2.clone()
     
     cfg.freeze()
 
@@ -304,9 +315,3 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     main(args)
-
-
-
-
-
-

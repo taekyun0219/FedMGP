@@ -249,6 +249,7 @@ class TrainerBase:
 
     def init_writer(self, log_dir):
         if self.__dict__.get("_writer") is None or self._writer is None:
+            mkdir_if_missing(log_dir)
             print(f"Initialize tensorboard (log_dir={log_dir})")
             self._writer = SummaryWriter(log_dir=log_dir)
 
@@ -372,6 +373,11 @@ class SimpleTrainer(TrainerBase):
             self.device = torch.device("cuda")
         else:
             self.device = torch.device("cpu")
+        
+        print("torch.cuda.is_available():", torch.cuda.is_available())
+        print("cfg.USE_CUDA:", cfg.USE_CUDA)
+        print("self.device:", self.device)
+
 
         # Save as attributes some frequently used variables
         self.start_epoch = self.epoch = 0
@@ -447,6 +453,9 @@ class SimpleTrainer(TrainerBase):
             base_test = getattr(dm, "test_loader", None)
             self.fed_test_loader_x_dict = {i: base_test for i in range(n_users)}
 
+        self.train_loader_x = dm.train_loader_x
+        self.train_loader_u = dm.train_loader_u
+        self.val_loader = dm.val_loader
         self.test_loader = dm.test_loader
 
         self.num_classes = dm.num_classes
@@ -795,8 +804,29 @@ class TrainerX(SimpleTrainer):
         losses = MetricMeter()
         batch_time = AverageMeter()
         data_time = AverageMeter()
-        if idx>=0:
-            loader = self.fed_train_loader_x_dict[idx]
+        # if idx >= 0:
+        #     loader = self.fed_train_loader_x_dict[idx]
+        #     print(f"[DEBUG] client {idx} loader assigned: {loader is not None}")
+        #     if loader is not None:
+        #         print(f"[DEBUG] client {idx} dataset size: {len(loader.dataset)}")
+        #         print(f"[DEBUG] client {idx} num_batches: {len(loader)}")
+        # else:
+        #     loader = self.train_loader_x
+            
+        # self.num_batches = len(loader)
+
+        # print(f"[DEBUG] before iter(loader), client={idx}")
+        # it = iter(loader)
+        # print(f"[DEBUG] iterator created, client={idx}")
+        # first_batch = next(it)
+        # print(f"[DEBUG] first batch fetched, client={idx}, keys={list(first_batch.keys())}")
+
+        if idx >= 0:
+            loader = None
+            if hasattr(self, "fed_train_loader_x_dict"):
+                loader = self.fed_train_loader_x_dict.get(idx)
+            if loader is None:
+                loader = self.train_loader_x
         else:
             loader = self.train_loader_x
         self.num_batches = len(loader)

@@ -17,12 +17,12 @@ OPTIM:
   NAME: "sgd"
   LR: 0.001
   LR_SCHEDULER: "single_step"
-  ROUND: 500  # global round
-  MAX_EPOCH: 1  # local epoch
+  ROUND: 10  # global round
+  MAX_EPOCH: 2  # Table 1 K=1 approximation via one local epoch
   WARMUP_EPOCH: 0
   WARMUP_TYPE: "constant"
   WARMUP_CONS_LR: 1e-5
-  GAMMA: 1  # gamma of single-step
+  GAMMA: 1
 
 TRAIN:
   PRINT_FREQ: 5
@@ -34,7 +34,7 @@ MODEL:
 
 DATASET:
   SUBSAMPLE_CLASSES: "base"  # all, base or new
-  USERS: 30  # number of clients
+  USERS: 10  # number of clients
   IID: False  # is iid
   FRAC: 1.0
   PARTITION: "noniid-labeldir"

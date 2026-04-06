@@ -1,6 +1,10 @@
 import os.path as osp
+import os
 from collections import OrderedDict
 import math
+import csv
+
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -222,6 +226,91 @@ class CustomCLIP(nn.Module):
         # Inference mode parameters
         self.inference_mode = getattr(cfg.TRAINER.FEDMGP, 'INFERENCE_MODE', 'average')
         self.selected_prompt_group = getattr(cfg.TRAINER.FEDMGP, 'SELECTED_PROMPT_GROUP', 0)
+        self.monitor_prompt_similarity = getattr(cfg.TRAINER.FEDMGP, 'MONITOR_PROMPT_SIMILARITY', True)
+        self.last_similarity_payload = None
+        self.last_visualization_payload = None
+
+    def _pairwise_mean_cosine_matrix(self, features_list):
+        """Return prompt-to-prompt mean cosine matrix over aligned rows."""
+        if not features_list:
+            return None
+
+        num_prompts = len(features_list)
+        device = features_list[0].device
+        dtype = features_list[0].dtype
+        matrix = torch.zeros((num_prompts, num_prompts), device=device, dtype=dtype)
+
+        for i in range(num_prompts):
+            for j in range(num_prompts):
+                sims = F.cosine_similarity(features_list[i], features_list[j], dim=1)
+                matrix[i, j] = sims.mean()
+
+        return matrix
+
+    def _cross_modal_similarity_matrix(self, text_features_list, image_features_list):
+        """Approximate cross-modal prompt similarity using mean pooled prompt features."""
+        if not text_features_list or not image_features_list:
+            return None
+
+        pooled_text = []
+        for feat in text_features_list:
+            pooled = feat.mean(dim=0)
+            pooled = pooled / pooled.norm(dim=-1, keepdim=True)
+            pooled_text.append(pooled)
+
+        pooled_image = []
+        for feat in image_features_list:
+            pooled = feat.mean(dim=0)
+            pooled = pooled / pooled.norm(dim=-1, keepdim=True)
+            pooled_image.append(pooled)
+
+        matrix = torch.zeros(
+            (len(image_features_list), len(text_features_list)),
+            device=text_features_list[0].device,
+            dtype=text_features_list[0].dtype
+        )
+
+        for i, img_feat in enumerate(pooled_image):
+            for j, txt_feat in enumerate(pooled_text):
+                matrix[i, j] = F.cosine_similarity(
+                    img_feat.unsqueeze(0), txt_feat.unsqueeze(0), dim=1
+                )[0]
+
+        return matrix
+
+    def _off_diagonal_mean(self, matrix):
+        if matrix is None:
+            return None
+        if matrix.size(0) <= 1 or matrix.size(1) <= 1:
+            return matrix.new_tensor(1.0)
+
+        diag_mask = torch.eye(matrix.size(0), matrix.size(1), device=matrix.device, dtype=torch.bool)
+        off_diag = matrix[~diag_mask]
+        if off_diag.numel() == 0:
+            return matrix.new_tensor(1.0)
+        return off_diag.mean()
+
+    def _build_similarity_payload(self, text_features_list, image_features_list):
+        text_matrix = self._pairwise_mean_cosine_matrix(text_features_list) if len(text_features_list) > 1 else None
+        vision_matrix = self._pairwise_mean_cosine_matrix(image_features_list) if len(image_features_list) > 1 else None
+        cross_matrix = self._cross_modal_similarity_matrix(text_features_list, image_features_list)
+
+        payload = {
+            "text_matrix": text_matrix.detach().float().cpu() if text_matrix is not None else None,
+            "vision_matrix": vision_matrix.detach().float().cpu() if vision_matrix is not None else None,
+            "cross_matrix": cross_matrix.detach().float().cpu() if cross_matrix is not None else None,
+            "text_offdiag_mean": float(self._off_diagonal_mean(text_matrix).item()) if text_matrix is not None else None,
+            "vision_offdiag_mean": float(self._off_diagonal_mean(vision_matrix).item()) if vision_matrix is not None else None,
+            "cross_diag_mean": float(cross_matrix.diag().mean().item()) if cross_matrix is not None and cross_matrix.size(0) == cross_matrix.size(1) else None,
+        }
+
+        return payload
+
+    def _build_visualization_payload(self, text_features_list, image_features_list):
+        return {
+            "text_features": [feat.detach().float().cpu() for feat in text_features_list],
+            "image_features": [feat.detach().float().cpu() for feat in image_features_list],
+        }
 
     def forward(self, image, label=None, image_paths=None):
         """Forward pass with multiple text and vision prompts.
@@ -253,6 +342,14 @@ class CustomCLIP(nn.Module):
 
         num_text_prompts = len(text_features_list)
         num_vision_prompts = len(image_features_list)
+        if self.monitor_prompt_similarity:
+            self.last_similarity_payload = self._build_similarity_payload(
+                text_features_list, image_features_list
+            )
+            if not self.training:
+                self.last_visualization_payload = self._build_visualization_payload(
+                    text_features_list, image_features_list
+                )
 
         all_logits = []
         logit_scale = self.logit_scale.exp()
@@ -516,6 +613,16 @@ class FedMGP(TrainerX):
             divergent_loss = output[2]
             loss_summary["divergent_loss"] = get_loss_value(divergent_loss)
 
+        model_ref = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+        sim_payload = getattr(model_ref, "last_similarity_payload", None)
+        if sim_payload:
+            if sim_payload.get("text_offdiag_mean") is not None:
+                loss_summary["text_offdiag_sim"] = sim_payload["text_offdiag_mean"]
+            if sim_payload.get("vision_offdiag_mean") is not None:
+                loss_summary["vision_offdiag_sim"] = sim_payload["vision_offdiag_mean"]
+            if sim_payload.get("cross_diag_mean") is not None:
+                loss_summary["cross_diag_sim"] = sim_payload["cross_diag_mean"]
+
         if (self.batch_idx + 1) == self.num_batches:
             self.update_lr()
 
@@ -562,6 +669,349 @@ class FedMGP(TrainerX):
         if isinstance(output, tuple):
             return output[0]
         return output
+
+    def _save_similarity_matrix_artifacts(self, matrix, row_labels, col_labels, title, stem):
+        if matrix is None:
+            return
+
+        import matplotlib.pyplot as plt
+
+        save_dir = osp.join(self.output_dir, "prompt_similarity")
+        os.makedirs(save_dir, exist_ok=True)
+
+        csv_path = osp.join(save_dir, f"{stem}.csv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("," + ",".join(col_labels) + "\n")
+            for label, row in zip(row_labels, matrix.tolist()):
+                f.write(label + "," + ",".join(f"{v:.6f}" for v in row) + "\n")
+
+        fig_w = max(6, len(col_labels) * 1.1)
+        fig_h = max(5, len(row_labels) * 0.9)
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        im = ax.imshow(matrix.numpy(), cmap="coolwarm", vmin=-1.0, vmax=1.0)
+        ax.set_xticks(range(len(col_labels)))
+        ax.set_xticklabels(col_labels, rotation=45, ha="right")
+        ax.set_yticks(range(len(row_labels)))
+        ax.set_yticklabels(row_labels)
+        ax.set_title(title)
+
+        for i in range(matrix.size(0)):
+            for j in range(matrix.size(1)):
+                ax.text(j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", fontsize=8, color="black")
+
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+        fig.savefig(osp.join(save_dir, f"{stem}.png"), dpi=200)
+        plt.close(fig)
+
+    def _should_save_visualizations(self, current_epoch, batch_idx=None):
+        if batch_idx is not None and batch_idx != 0:
+            return False
+        if getattr(self.cfg, "EVAL_ONLY", False):
+            return True
+        return (current_epoch + 1) >= self.cfg.OPTIM.ROUND
+
+    def _init_prompt_umap_buffer(self):
+        return {
+            "image_features": [],
+            "labels": [],
+            "class_names": {},
+        }
+
+    def _accumulate_prompt_umap_payload(self, buffer, labels):
+        model_ref = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+        vis_payload = getattr(model_ref, "last_visualization_payload", None)
+        if not vis_payload:
+            return
+
+        image_features = vis_payload.get("image_features") or []
+        if not image_features:
+            return
+
+        if not buffer["image_features"]:
+            buffer["image_features"] = [[] for _ in range(len(image_features))]
+
+        labels_cpu = labels.detach().cpu()
+        buffer["labels"].append(labels_cpu)
+
+        for prompt_idx, feat in enumerate(image_features):
+            buffer["image_features"][prompt_idx].append(feat)
+
+        if hasattr(self.dm, "lab2cname") and self.dm.lab2cname is not None:
+            for label_id in labels_cpu.unique().tolist():
+                if label_id not in buffer["class_names"]:
+                    buffer["class_names"][label_id] = self.dm.lab2cname.get(label_id, str(label_id))
+
+    def _project_embeddings_2d(self, embeddings):
+        centered = embeddings - embeddings.mean(axis=0, keepdims=True)
+        method = "PCA"
+
+        try:
+            import umap
+
+            reducer = umap.UMAP(
+                n_components=2,
+                metric="cosine",
+                random_state=42,
+                n_neighbors=max(2, min(15, embeddings.shape[0] - 1)),
+                min_dist=0.15,
+            )
+            coords = reducer.fit_transform(embeddings)
+            method = "UMAP"
+            return coords, method
+        except Exception:
+            pass
+
+        if centered.shape[0] == 1:
+            return np.zeros((1, 2), dtype=np.float32), method
+
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        if vh.shape[0] == 1:
+            pad = np.zeros((centered.shape[0], 1), dtype=np.float32)
+            coords = np.concatenate([centered @ vh[:1].T, pad], axis=1)
+        else:
+            coords = centered @ vh[:2].T
+        return coords.astype(np.float32), method
+
+    def _compute_prompt_umap_statistics(self, sample_features, labels):
+        prompt_centroids = []
+        centroid_records = []
+        sample_records = []
+
+        max_num_prompts = len(sample_features)
+        labels_np = labels.numpy()
+        unique_labels = sorted(set(labels_np.tolist()))
+
+        for prompt_idx in range(max_num_prompts):
+            feats = sample_features[prompt_idx]
+            if feats.size(0) == 0:
+                continue
+
+            feats = F.normalize(feats, dim=1)
+            centroid_map = {}
+            for label_id in unique_labels:
+                mask = labels == label_id
+                if mask.any():
+                    centroid = feats[mask].mean(dim=0)
+                    centroid = F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)
+                    centroid_map[label_id] = centroid
+                    prompt_centroids.append(centroid.numpy())
+                    centroid_records.append({
+                        "prompt_idx": prompt_idx,
+                        "label_id": int(label_id),
+                    })
+
+            if not centroid_map:
+                continue
+
+            centroid_labels = sorted(centroid_map.keys())
+            centroid_stack = torch.stack([centroid_map[label_id] for label_id in centroid_labels], dim=0)
+            sims = feats @ centroid_stack.t()
+            pred_indices = sims.argmax(dim=1)
+            pred_labels = torch.tensor([centroid_labels[i] for i in pred_indices.tolist()], dtype=labels.dtype)
+
+            for sample_idx in range(feats.size(0)):
+                sample_records.append({
+                    "prompt_idx": prompt_idx,
+                    "label_id": int(labels[sample_idx].item()),
+                    "pred_label_id": int(pred_labels[sample_idx].item()),
+                })
+
+        if not centroid_records:
+            return None
+
+        centroid_array = np.stack(prompt_centroids, axis=0).astype(np.float32)
+        centroid_norm = centroid_array / np.clip(np.linalg.norm(centroid_array, axis=1, keepdims=True), 1e-12, None)
+        centroid_cos = centroid_norm @ centroid_norm.T
+        if centroid_cos.shape[0] > 1:
+            off_diag_mask = ~np.eye(centroid_cos.shape[0], dtype=bool)
+            max_cos = float(centroid_cos[off_diag_mask].max())
+        else:
+            max_cos = 1.0
+
+        correct = sum(1 for rec in sample_records if rec["label_id"] == rec["pred_label_id"])
+        cluster_rate = float(correct / len(sample_records)) if sample_records else 0.0
+        ambiguous_frac = 1.0 - cluster_rate
+
+        coords, method = self._project_embeddings_2d(centroid_array)
+        for rec, coord in zip(centroid_records, coords):
+            rec["x"] = float(coord[0])
+            rec["y"] = float(coord[1])
+
+        return {
+            "centroid_records": centroid_records,
+            "sample_records": sample_records,
+            "max_cos": max_cos,
+            "cluster_rate": cluster_rate,
+            "ambiguous_frac": ambiguous_frac,
+            "projection_method": method,
+        }
+
+    def _save_prompt_umap_artifacts(self, stats, current_epoch, idx, global_test):
+        if stats is None:
+            return
+
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+
+        save_dir = osp.join(self.output_dir, "prompt_similarity")
+        os.makedirs(save_dir, exist_ok=True)
+
+        suffix = "global" if global_test and not getattr(self, 'is_special_dataset', False) else f"client_{idx}"
+        epoch_tag = current_epoch + 1
+        stem = f"prompt_centroid_projection_epoch_{epoch_tag}_{suffix}"
+
+        csv_path = osp.join(save_dir, f"{stem}.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["prompt_idx", "label_id", "class_name", "x", "y"])
+            for rec in stats["centroid_records"]:
+                class_name = self.dm.lab2cname.get(rec["label_id"], str(rec["label_id"]))
+                writer.writerow([
+                    rec["prompt_idx"],
+                    rec["label_id"],
+                    class_name,
+                    f"{rec['x']:.6f}",
+                    f"{rec['y']:.6f}",
+                ])
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        class_ids = sorted({rec["label_id"] for rec in stats["centroid_records"]})
+        cmap = plt.cm.get_cmap("tab20", max(20, len(class_ids)))
+        class_to_color = {label_id: cmap(i % cmap.N) for i, label_id in enumerate(class_ids)}
+        markers = ["o", "s", "^", "D", "P", "X", "v", "<", ">", "*"]
+
+        for rec in stats["centroid_records"]:
+            ax.scatter(
+                rec["x"],
+                rec["y"],
+                c=[class_to_color[rec["label_id"]]],
+                marker=markers[rec["prompt_idx"] % len(markers)],
+                s=80,
+                edgecolors="black",
+                linewidths=0.4,
+                alpha=0.9,
+            )
+
+        title_method = stats["projection_method"]
+        ax.set_title(f"Prompt Centroid {title_method} (epoch={epoch_tag}, {suffix})")
+        ax.set_xlabel(f"{title_method}-1")
+        ax.set_ylabel(f"{title_method}-2")
+        ax.text(
+            0.5,
+            0.99,
+            (
+                f"max cos: {stats['max_cos']:.4f} | "
+                f"cluster rate: {stats['cluster_rate']:.4f} | "
+                f"ambiguous frac: {stats['ambiguous_frac']:.4f}"
+            ),
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=10,
+        )
+
+        if len(class_ids) <= 20:
+            class_handles = [
+                Line2D([0], [0], marker="o", linestyle="", color=class_to_color[label_id],
+                       markeredgecolor="black", markeredgewidth=0.4,
+                       label=self.dm.lab2cname.get(label_id, str(label_id)))
+                for label_id in class_ids
+            ]
+            prompt_ids = sorted({rec["prompt_idx"] for rec in stats["centroid_records"]})
+            prompt_handles = [
+                Line2D([0], [0], marker=markers[prompt_idx % len(markers)], linestyle="", color="black",
+                       label=f"Prompt {prompt_idx}")
+                for prompt_idx in prompt_ids
+            ]
+            ax.legend(
+                handles=class_handles + prompt_handles,
+                bbox_to_anchor=(1.02, 1),
+                loc="upper left",
+                borderaxespad=0,
+                fontsize=8,
+            )
+
+        fig.tight_layout()
+        fig.savefig(osp.join(save_dir, f"{stem}.png"), dpi=220, bbox_inches="tight")
+        plt.close(fig)
+
+        print(
+            "[PromptUMAP] "
+            f"saved {stem}.png | method={stats['projection_method']} | "
+            f"max cos={stats['max_cos']:.4f}, cluster rate={stats['cluster_rate']:.4f}, "
+            f"ambiguous frac={stats['ambiguous_frac']:.4f}"
+        )
+
+    def _maybe_save_prompt_similarity(self, current_epoch, idx, global_test, batch_idx):
+        if not self._should_save_visualizations(current_epoch, batch_idx=batch_idx):
+            return
+
+        model_ref = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+        sim_payload = getattr(model_ref, "last_similarity_payload", None)
+        if not sim_payload:
+            return
+
+        suffix = "global" if global_test and not getattr(self, 'is_special_dataset', False) else f"client_{idx}"
+        epoch_tag = current_epoch + 1
+
+        if sim_payload.get("text_matrix") is not None:
+            text_n = sim_payload["text_matrix"].size(0)
+            labels = [f"T{i}" for i in range(text_n)]
+            self._save_similarity_matrix_artifacts(
+                sim_payload["text_matrix"],
+                labels,
+                labels,
+                f"Text Prompt Similarity (epoch={epoch_tag}, {suffix})",
+                f"text_similarity_epoch_{epoch_tag}_{suffix}"
+            )
+
+        if sim_payload.get("vision_matrix") is not None:
+            vision_n = sim_payload["vision_matrix"].size(0)
+            labels = [f"V{i}" for i in range(vision_n)]
+            self._save_similarity_matrix_artifacts(
+                sim_payload["vision_matrix"],
+                labels,
+                labels,
+                f"Vision Prompt Similarity (epoch={epoch_tag}, {suffix})",
+                f"vision_similarity_epoch_{epoch_tag}_{suffix}"
+            )
+
+        if sim_payload.get("cross_matrix") is not None:
+            row_labels = [f"V{i}" for i in range(sim_payload["cross_matrix"].size(0))]
+            col_labels = [f"T{i}" for i in range(sim_payload["cross_matrix"].size(1))]
+            self._save_similarity_matrix_artifacts(
+                sim_payload["cross_matrix"],
+                row_labels,
+                col_labels,
+                f"Cross-Modal Prompt Similarity (epoch={epoch_tag}, {suffix})",
+                f"cross_similarity_epoch_{epoch_tag}_{suffix}"
+            )
+
+        if sim_payload.get("text_offdiag_mean") is not None:
+            print(f"[PromptSimilarity] text off-diagonal mean cosine: {sim_payload['text_offdiag_mean']:.4f}")
+        if sim_payload.get("vision_offdiag_mean") is not None:
+            print(f"[PromptSimilarity] vision off-diagonal mean cosine: {sim_payload['vision_offdiag_mean']:.4f}")
+        if sim_payload.get("cross_diag_mean") is not None:
+            print(f"[PromptSimilarity] cross diagonal mean cosine: {sim_payload['cross_diag_mean']:.4f}")
+
+    def _finalize_prompt_umap(self, prompt_umap_buffer, current_epoch, idx, global_test):
+        if prompt_umap_buffer is None:
+            return
+        if not self._should_save_visualizations(current_epoch):
+            return
+        if not prompt_umap_buffer["image_features"] or not prompt_umap_buffer["labels"]:
+            return
+
+        labels = torch.cat(prompt_umap_buffer["labels"], dim=0)
+        sample_features = []
+        for prompt_batches in prompt_umap_buffer["image_features"]:
+            if not prompt_batches:
+                continue
+            sample_features.append(torch.cat(prompt_batches, dim=0))
+
+        stats = self._compute_prompt_umap_statistics(sample_features, labels)
+        self._save_prompt_umap_artifacts(stats, current_epoch, idx, global_test)
 
     def load_model(self, directory, epoch=None):
         """Load pretrained model, ignoring fixed token vectors."""
@@ -650,6 +1100,7 @@ class FedMGP(TrainerX):
 
         test_type = "global" if global_test and not getattr(self, 'is_special_dataset', False) else f"client {idx}"
         print(f"Evaluating on {test_type} {split} set")
+        prompt_umap_buffer = self._init_prompt_umap_buffer() if self._should_save_visualizations(current_epoch) else None
 
         for batch_idx, batch in enumerate(data_loader):
             input, label = self.parse_batch_test(batch)
@@ -657,9 +1108,14 @@ class FedMGP(TrainerX):
             with torch.no_grad():
                 output = self.model_inference(input)
 
+            self._maybe_save_prompt_similarity(current_epoch, idx, global_test, batch_idx)
+            if prompt_umap_buffer is not None:
+                self._accumulate_prompt_umap_payload(prompt_umap_buffer, label)
+
             self.evaluator.process(output, label)
 
         results = self.evaluator.evaluate()
+        self._finalize_prompt_umap(prompt_umap_buffer, current_epoch, idx, global_test)
 
         for k, v in results.items():
             tag = f"{split}/{k}"

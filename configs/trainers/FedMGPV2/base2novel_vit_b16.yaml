@@ -45,13 +45,22 @@ DATASET:
   SPLIT_CLIENT: False
 
 TRAINER:
-  FEDMOPG:
-    N_CTX: 4
-    D_CTX: 1
-    DEPTH: 0
-    CROSS_HEADS: 4
-    SELF_HEADS: 4
-    # Client-adaptive semantic generator(image feature) + Cross-modal coupled prompt refinement
-    PROTOTYPE_WEIGHT: 0.5
-    PROTOTYPE_MOMENTUM: 0.9
+  FEDMGPV2:
+    N_CTX_VISION: 2
+    N_CTX_TEXT: 2
+    NUM_PROMPTS_VISION: 2
+    NUM_PROMPTS_TEXT: 2
+    CTX_INIT: "a photo of a"
     PREC: "fp16"
+    PROMPT_DEPTH_VISION: 1
+    PROMPT_DEPTH_TEXT: 1
+    USE_DIVERGENT_LOSS: True
+    DIVERGENT_LOSS_WEIGHT: 1.0
+    TOPK: 1
+    AGGREGATE_HIGHEST_SIM: True
+    SELECT_MODE: "similarity"
+    INFERENCE_MODE: "average"
+    SELECTED_PROMPT_GROUP: 0
+    PROBABILISTIC_SELECTION: True
+    TEMPERATURE: 1.0
+    DIVERGENT_LOSS_TYPE: "l1"

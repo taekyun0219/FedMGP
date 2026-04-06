@@ -18,6 +18,7 @@ from trainers.fedmopg import FedMoPG
 from trainers.vpt import VPT
 from trainers.independentVL import IVLP
 from trainers.fedmgp import FedMGP
+from trainers.fedmgpv2 import FedMGPV2
 from trainers.fedcoop import FedCoCoOp
 from trainers.clip_0 import CLIP
 TRAINER_REGISTRY = Registry("TRAINER")
@@ -37,9 +38,11 @@ TRAINER_REGISTRY.register(FedPGP)
 TRAINER_REGISTRY.register(FedOPT)
 TRAINER_REGISTRY.register(PromptFolio)
 TRAINER_REGISTRY.register(FedTPG)
+TRAINER_REGISTRY.register(FedMoPG)
 TRAINER_REGISTRY.register(VPT)
 TRAINER_REGISTRY.register(IVLP)
 TRAINER_REGISTRY.register(FedMGP)
+TRAINER_REGISTRY.register(FedMGPV2)
 TRAINER_REGISTRY.register(FedCoCoOp)
 def build_trainer(cfg):
     avai_trainers = TRAINER_REGISTRY.registered_names()

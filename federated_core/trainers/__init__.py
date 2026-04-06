@@ -2,6 +2,7 @@
 
 from .fedpgp_learner import FedPGPLearner
 from .fedmgp_learner import FedMGPLearner
+from .fedmgpv2_learner import FedMGPV2Learner
 from .fedopt_learner import FedOPTLearner
 from .ivlp_learner import IVLPLearner
 from .promptfl_learner import PromptFLLearner
@@ -13,6 +14,7 @@ from .default_learner import DefaultLearner
 __all__ = [
     'FedPGPLearner',
     'FedMGPLearner',
+    'FedMGPV2Learner',
     'FedOPTLearner',
     'IVLPLearner',
     'PromptFLLearner',

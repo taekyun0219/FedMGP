@@ -4,6 +4,7 @@ from typing import Type, List
 from .base_federated_learner import BaseFederatedLearner
 from .trainers.fedpgp_learner import FedPGPLearner
 from .trainers.fedmgp_learner import FedMGPLearner
+from .trainers.fedmgpv2_learner import FedMGPV2Learner
 from .trainers.fedopt_learner import FedOPTLearner
 from .trainers.ivlp_learner import IVLPLearner
 from .trainers.promptfl_learner import PromptFLLearner
@@ -21,6 +22,7 @@ class FederatedLearnerFactory:
     _learner_registry = {
         'FedPGP': FedPGPLearner,
         'FedMGP': FedMGPLearner,
+        'FedMGPV2': FedMGPV2Learner,
         'FedOPT': FedOPTLearner,
         'PromptFolio': FedOPTLearner,
         'IVLP': IVLPLearner,

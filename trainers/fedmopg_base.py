@@ -1,3 +1,4 @@
+#그냥 FedTPG의 prompt generator에서 병렬로 vision prompt도 생성하도록. -> text prompt와 vision prompt 상호작용 없음 
 import os.path as osp
 
 from einops import repeat
@@ -145,32 +146,6 @@ class SelfAttention(nn.Module):
         return x
 
 
-class CrossModalCoupling(nn.Module):
-    #text prompt latent가 vision latent를 보고, vision latent가 text latent를 다시 보는 co-attention refinement
-    #독립 생성된 두 modality prompt가 서로 semantic하게 맞물리도록 정렬해 주는 블록
-    def __init__(self, latent_dim, heads=4):
-        super().__init__()
-        self.text_to_vision = PreNorm(
-            latent_dim,
-            nn.MultiheadAttention(latent_dim, num_heads=heads, batch_first=True),
-            context_dim=latent_dim,
-        )
-        self.vision_to_text = PreNorm(
-            latent_dim,
-            nn.MultiheadAttention(latent_dim, num_heads=heads, batch_first=True),
-            context_dim=latent_dim,
-        )
-        self.text_ff = FeedForward(latent_dim)
-        self.vision_ff = FeedForward(latent_dim)
-
-    def forward(self, text_latent, vision_latent):
-        text_refined = self.text_to_vision(text_latent, vision_latent)[0] + text_latent
-        vision_refined = self.vision_to_text(vision_latent, text_latent)[0] + vision_latent
-        text_refined = self.text_ff(text_refined) + text_refined
-        vision_refined = self.vision_ff(vision_refined) + vision_refined
-        return text_refined, vision_refined
-
-
 class SinglePromptGenerator(nn.Module):
     #현재 FedMoPG의 중심
     #text prompt랑 vision prompt를 따로 들고 있고, 각각 class-token embedding을 조건으로 cross-attention함
@@ -181,19 +156,14 @@ class SinglePromptGenerator(nn.Module):
         latent_dim=512,
         text_prompt_dim=512,
         vision_prompt_dim=768,
-        visual_proto_dim=512,
         depth=0,
         self_heads=4,
         cross_heads=4,
         textemb_dim=512,
-        prototype_weight=0.5,
-        prototype_momentum=0.9,
     ):
         super().__init__()
         self.prompt_len = prompt_len
         self.prompt_depth = prompt_depth
-        self.prototype_weight = prototype_weight
-        self.prototype_momentum = prototype_momentum
 
         total_prompt_tokens = prompt_depth * prompt_len     #여기서 prompt token 개수는 prompt_depth * prompt_len
         text_soft_prompt = torch.empty(total_prompt_tokens, latent_dim)
@@ -213,22 +183,6 @@ class SinglePromptGenerator(nn.Module):
             kv_dim=textemb_dim,
             cross_heads=cross_heads,
         )
-        self.text_prototype_encoder = CrossAttention(
-            latent_dim=latent_dim,
-            kv_dim=visual_proto_dim,
-            cross_heads=cross_heads,
-        )
-        self.vision_prototype_encoder = CrossAttention(
-            latent_dim=latent_dim,
-            kv_dim=visual_proto_dim,
-            cross_heads=cross_heads,
-        )
-        self.prototype_gate = nn.Sequential(
-            nn.LayerNorm(latent_dim),
-            nn.Linear(latent_dim, latent_dim),
-            nn.Sigmoid(),
-        )
-        self.cross_modal_coupling = CrossModalCoupling(latent_dim, heads=cross_heads)
 
         self.depth = depth
         if depth > 0:
@@ -253,27 +207,13 @@ class SinglePromptGenerator(nn.Module):
             nn.Linear(latent_dim, vision_prompt_dim),
         )
 
-    def forward(self, class_token_embeddings, visual_prototypes=None, class_token_mask=None):   #class-token embedding을 입력받아 text/vision prompt latent를 각각 생성
+    def forward(self, class_token_embeddings, class_token_mask=None):   #class-token embedding을 입력받아 text/vision prompt latent를 각각 생성
         text_ctx = self.text_encoder(
             class_token_embeddings, self.text_soft_prompt, mask=class_token_mask
         )
         vis_ctx = self.vision_encoder(
             class_token_embeddings, self.vision_soft_prompt, mask=class_token_mask
         )
-
-        if visual_prototypes is not None:
-            text_proto_ctx = self.text_prototype_encoder(
-                visual_prototypes, self.text_soft_prompt
-            )
-            vis_proto_ctx = self.vision_prototype_encoder(
-                visual_prototypes, self.vision_soft_prompt
-            )
-            text_gate = self.prototype_gate(text_proto_ctx)
-            vis_gate = self.prototype_gate(vis_proto_ctx)
-            text_ctx = text_ctx + self.prototype_weight * text_gate * text_proto_ctx
-            vis_ctx = vis_ctx + self.prototype_weight * vis_gate * vis_proto_ctx
-
-        text_ctx, vis_ctx = self.cross_modal_coupling(text_ctx, vis_ctx)
 
         if self.depth > 0:
             text_ctx = self.text_transformer(text_ctx)
@@ -372,7 +312,6 @@ class PromptLearner(nn.Module):
         self.token_embedding = clip_model.token_embedding
         self.text_prompt_dim = clip_model.ln_final.weight.shape[0]
         self.vision_prompt_dim = clip_model.visual.class_embedding.shape[0]
-        self.visual_proto_dim = clip_model.visual.output_dim
 
         prompts = [self.prompt_prefix + " " + name + "." for name in self.classnames]
         tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
@@ -393,20 +332,12 @@ class PromptLearner(nn.Module):
             latent_dim=self.text_prompt_dim,
             text_prompt_dim=self.text_prompt_dim,
             vision_prompt_dim=self.vision_prompt_dim,
-            visual_proto_dim=self.visual_proto_dim,
             depth=cfg.TRAINER.FEDMOPG.DEPTH,
             cross_heads=cfg.TRAINER.FEDMOPG.CROSS_HEADS,
             self_heads=cfg.TRAINER.FEDMOPG.SELF_HEADS,
             textemb_dim=self.text_prompt_dim,
-            prototype_weight=cfg.TRAINER.FEDMOPG.PROTOTYPE_WEIGHT,
-            prototype_momentum=cfg.TRAINER.FEDMOPG.PROTOTYPE_MOMENTUM,
         )
         self.meta_net.half()
-        self.register_buffer(
-            "prototype_memory",
-            torch.zeros(1, 1, self.visual_proto_dim, dtype=self.dtype),
-        )
-        self.prototype_initialized = False
 
     def get_class_token_embeddings(self):
         #class name token들을 CLIP token embedding으로 바꾸고, padding mask를 만듦
@@ -425,38 +356,10 @@ class PromptLearner(nn.Module):
         #여기서 suffix에는 class name과 EOS 이후 토큰이 포함됨
         return torch.cat([self.token_prefix, ctx, self.token_suffix], dim=1)
 
-    def update_prototype_memory(self, visual_prototypes):
-        #client local image feature prototype을 EMA 형태로 유지하여 batch noise를 줄이고 client-level 시각 분포를 보존
-        if visual_prototypes is None:
-            return
-
-        proto_mean = visual_prototypes.mean(dim=1, keepdim=True).detach().type(self.dtype)
-        if not self.prototype_initialized:
-            self.prototype_memory.copy_(proto_mean)
-            self.prototype_initialized = True
-            return
-
-        momentum = self.meta_net.prototype_momentum
-        self.prototype_memory.mul_(momentum).add_(proto_mean * (1.0 - momentum))
-
-    def forward(self, visual_prototypes=None):
+    def forward(self):
         #class-token embedding을 준비한 뒤 generator를 호출해서 text prompt와 vision prompt를 한 쌍 생성
         class_token_embeddings, class_token_mask = self.get_class_token_embeddings()
-        if visual_prototypes is not None:
-            self.update_prototype_memory(visual_prototypes)
-
-        if self.prototype_initialized:
-            prototype_context = self.prototype_memory
-            if visual_prototypes is not None:
-                prototype_context = torch.cat([prototype_context, visual_prototypes], dim=1)
-        else:
-            prototype_context = visual_prototypes
-
-        text_ctx, vis_ctx = self.meta_net(
-            class_token_embeddings,
-            visual_prototypes=prototype_context,
-            class_token_mask=class_token_mask,
-        )
+        text_ctx, vis_ctx = self.meta_net(class_token_embeddings, class_token_mask)
 
         shallow_text_ctx = text_ctx[0].unsqueeze(0).expand(self.n_cls, -1, -1)
         prompt_vectors = self.construct_prompts(shallow_text_ctx)
@@ -481,31 +384,9 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
 
-    def build_visual_prototypes(self, image, label=None):
-        #client local image feature prototype:
-        #frozen image encoder로 뽑은 로컬 이미지 feature를 평균내어 client의 시각 분포를 대표하는 vector sequence를 만듦
-        with torch.no_grad():
-            image_features = self.image_encoder(image.type(self.dtype), None)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
-        if label is None:
-            return image_features.mean(dim=0, keepdim=True).unsqueeze(0)
-
-        prototypes = []
-        unique_labels = torch.unique(label, sorted=True)
-        for cls_id in unique_labels:
-            cls_mask = label == cls_id
-            prototypes.append(image_features[cls_mask].mean(dim=0))
-
-        if not prototypes:
-            return image_features.mean(dim=0, keepdim=True).unsqueeze(0)
-
-        return torch.stack(prototypes, dim=0).unsqueeze(0)
-
     def forward(self, image, label=None):
+        prompt_group = self.prompt_learner()
         image = image.type(self.dtype)
-        visual_prototypes = self.build_visual_prototypes(image, label if self.training else None)
-        prompt_group = self.prompt_learner(visual_prototypes=visual_prototypes)
         logit_scale = self.logit_scale.exp()
 
         text_features = self.text_encoder(

@@ -4,13 +4,12 @@ GPU=$1                                    # GPU ID
 DATASET=$2                                # Dataset name
 SHOTS=${3:-8}                             # Number of shots, default 8
 CONFIG_FILE=${4:-"base2novel_vit_b16"}    # Config file name
-SEED=${5:-0}                              # Random seed, default 0
 
 DATA="${COOP_DATASET}"                    # Dataset root path
 cfg_file=${CONFIG_FILE}
-trainer=FedMGP
-model=FedMGP
-#SEED=0
+trainer=FedMGPV2
+model=FedMGPV2
+SEED=0
 SUBSAMPLE_CLASSES=base
 USEALL=False
 

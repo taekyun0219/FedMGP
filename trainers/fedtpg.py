@@ -87,10 +87,10 @@ class FeedForward(nn.Module):
 class CrossAttention(nn.Module):
     def __init__(
             self,
-            latent_dim,
-            kv_dim,
-            cross_heads=4,
-            seq_dropout_prob=0.
+            latent_dim, #prompt latent 차원
+            kv_dim, #context(text embedding) 차원
+            cross_heads=4, #attention head 수 
+            seq_dropout_prob=0. #attention dropout
     ):
         super().__init__()
         self.seq_dropout_prob = seq_dropout_prob
@@ -104,8 +104,8 @@ class CrossAttention(nn.Module):
 
     def forward(
             self,
-            data,
-            soft_prompt,
+            data,   #text embedding / 예상 shape : [B, T, kv_dim]
+            soft_prompt, #학습 가능한 prompt seed shape [N, latent_dim]
             mask=None,
     ):
         b, *_, device = *data.shape, data.device
@@ -114,7 +114,7 @@ class CrossAttention(nn.Module):
         x, _ = cross_attn(x, data, key_padding_mask=mask)
         x = cross_ff(x)+x
 
-        return x
+        return x    #출력 x : conditioning된 prompt tensor / shape : [B, N, latent_dim]
 
 
 class SelfAttention(nn.Module):
@@ -136,27 +136,27 @@ class SelfAttention(nn.Module):
 
     def forward(
             self,
-            x,
-            mask=None
+            x,  #prompt tensor [B, N, latent_dim]
+            mask=None   #optional mask
     ):
         # layers
 
         for self_attn, self_ff in self.layers:
             x = self_attn(x, key_padding_mask=mask)[0] + x
             x = self_ff(x) + x
-        return x
+        return x    #refinement된 prompt tensor
 
 
 class PromptTranslator(nn.Module):
     def __init__(
             self,
-            prompt_len,
-            prompt_depth,
-            prompt_dim = 512,
-            depth=4,
-            self_heads = 4,
-            cross_heads = 4,
-            textemb_dim=512,
+            prompt_len, #각 prompt depth에서 prompt token 개수
+            prompt_depth,   #몇 개의 depth에 prompt를 넣을지
+            prompt_dim = 512,   #prompt feature 차원
+            depth=4,    #내부 self-attention refinement 깊이
+            self_heads = 4, #self-attention head 수
+            cross_heads = 4,    #cross-attention head 수
+            textemb_dim=512,    #입력 text embedding 차원
             device='cuda'
     ):
         super().__init__()
@@ -181,7 +181,7 @@ class PromptTranslator(nn.Module):
         
     def forward(
             self,
-            text_emb,
+            text_emb,   #text embedding / 실제 호출부에서는 context_emb.unsqueeze(0)로 들어오므로 shape는 대체로 [1, n_cls, 512]
     ):
         prompt = self.encoder(text_emb, self.soft_prompt)
         if self.depth>0:
@@ -194,7 +194,7 @@ class PromptTranslator(nn.Module):
         if self.prompt_depth > 1:
             prompt = prompt.reshape(self.prompt_depth, self.prompt_len, -1)
 
-        return prompt, prompt
+        return prompt, prompt   #첫 번째는 text branch용 context / 두 번째는 vision branch용 context -> 같은 값을 복제해서 씀
 
 
 class ImageEncoder(nn.Module):
@@ -209,7 +209,7 @@ class ImageEncoder(nn.Module):
         self.ln_post = clip_model.ln_post
         self.proj = clip_model.proj
 
-    def forward(self, x, vis_ctx=[]):
+    def forward(self, x, vis_ctx=[]):   #vis_ctx는 사실상 무시됨
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -240,7 +240,10 @@ class TextEncoder(nn.Module):
         self.text_projection = clip_model.text_projection
         self.dtype = clip_model.dtype
 
-    def forward(self, prompts, tokenized_prompts, text_ctx):
+    def forward(self, prompts, tokenized_prompts, text_ctx):    
+        #prompts: token embedding tensor shape [n_cls, seq_len, width]
+        #tokenized_prompts: token id tensor shape [n_cls, seq_len]
+        #text_ctx: deeper prompt context 또는 나머지 context
         x = prompts + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x, text_ctx, True)
@@ -259,13 +262,13 @@ class PromptLearner(nn.Module):
         n_cls = len(classnames)
         self.n_cls = n_cls
 
-        n_ctx = cfg.TRAINER.FEDTPG.N_CTX
+        n_ctx = cfg.TRAINER.FEDTPG.N_CTX    #shallow context token 개수 (length)
         self.n_ctx = n_ctx
 
-        ctx_depth = cfg.TRAINER.FEDTPG.D_CTX
+        ctx_depth = cfg.TRAINER.FEDTPG.D_CTX    #prompt depth
         self.ctx_depth = ctx_depth
 
-        self.meta_net = PromptTranslator(n_ctx, ctx_depth, depth=cfg.TRAINER.FEDTPG.DEPTH)
+        self.meta_net = PromptTranslator(n_ctx, ctx_depth, depth=cfg.TRAINER.FEDTPG.DEPTH)  #generator 내부 self-attention depth
         self.meta_net.half()
 
         dtype = clip_model.dtype
@@ -338,7 +341,7 @@ class CustomCLIP(nn.Module):
         return embedding, tokenized_prompts
 
     def encode_image(self, image, vis_ctx):
-        return self.image_encoder(image.type(self.dtype))
+        return self.image_encoder(image.type(self.dtype))   #image feature 생성
 
     def encode_text(self, classnames, text_features_):
         context_emb = text_features_
@@ -390,10 +393,10 @@ class CustomCLIP(nn.Module):
         logit_scale = self.logit_scale.exp()
         logits = logit_scale * image_features @ text_features.t()
 
-        return logits
+        return logits   #출력 : logits
 
 
-class FedTPG(TrainerX):
+class FedTPG(TrainerX): #Dassl trainer 인터페이스에 맞춘 로컬 학습기
     def check_cfg(self, cfg):
         assert cfg.TRAINER.FEDTPG.PREC in ["fp16", "fp32", "amp"]
 

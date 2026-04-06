@@ -77,20 +77,20 @@ class OxfordPets(DatasetBase):
                                                                             num_users=cfg.DATASET.USERS,
                                                                             is_iid=cfg.DATASET.IID,
                                                                             repeat_rate=cfg.DATASET.REPEATRATE)
-                federated_test_x = self.generate_federated_dataset(test, num_shots=num_shots,
+                federated_test_x = self.generate_federated_dataset(test, num_shots=-1,
                                                                num_users=cfg.DATASET.USERS, is_iid=cfg.DATASET.IID,
                                                                repeat_rate=cfg.DATASET.REPEATRATE)
 
         elif cfg.DATASET.USERS > 0 and cfg.DATASET.USEALL:
             federated_train_x = self.generate_federated_dataset(total_train, num_shots=num_shots,
                                                                         num_users=cfg.DATASET.USERS, is_iid=cfg.DATASET.IID, repeat_rate=repeat_rate)
-            federated_test_x = self.generate_federated_dataset(test, num_shots=num_shots,
+            federated_test_x = self.generate_federated_dataset(test, num_shots=-1,
                                                                 num_users=cfg.DATASET.USERS, is_iid=cfg.DATASET.IID,
                                                                 repeat_rate=repeat_rate)
             print("federated all dataset")
         elif cfg.DATASET.USERS > 0 and not cfg.DATASET.USEALL:
             federated_train_x = self.generate_federated_fewshot_dataset(total_train, num_shots=num_shots,num_users=cfg.DATASET.USERS, is_iid=cfg.DATASET.IID, repeat_rate=repeat_rate)
-            federated_test_x = self.generate_federated_dataset(test, num_shots=num_shots,
+            federated_test_x = self.generate_federated_dataset(test, num_shots=-1,
                                                                 num_users=cfg.DATASET.USERS, is_iid=cfg.DATASET.IID,
                                                                 repeat_rate=repeat_rate)
             print("fewshot federated dataset")
